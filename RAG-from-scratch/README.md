@@ -14,7 +14,7 @@ With RAG, the LLM is able to leverage knowledge and information that is not nece
 
 # RAG Architecture.
 
-### Phase 1 --> Ingestion
+## Phase 1 --> Ingestion
 
 ![Ingestion Flow](./assets/Ingestion.png)
 
@@ -114,8 +114,105 @@ This is why Neo4i recently added the ability to perform vector similarity search
 
 [To know a detailed comparison of different databases click here](https://superlinked.com/vector-db-comparison/)
 
-### Phase 2 --> Retrieval
+## Phase 2 --> Retrieval
 
-### Phase 3 --> Generation
+## Phase 3 --> Generation
 
-![Ingestion Flow](./assets/Retrieval-and-Generation.png)
+![Retrieval and Generation Flow](./assets/Retrieval-and-Generation.png)
+
+#### Let's Understand the retrieval process
+
+#### Standard naive approach
+
+![Standard naive retrieval](./assets/Standard-Retrieval.png)
+
+The standard pipeline uses the same text chunk for indexing/embedding as well as the output synthesis.
+
+#### Advantages:
+
+1. Simplicity and Efficiency
+2. Uniformity in Data Handling
+
+#### Disadvantages:
+
+1. Limited Contextual Understanding
+2. Potential for Suboptimal Responses
+
+#### Sentence-Window Retrieval / Small-to-Large Chunking
+
+![Sentence-Window Retrieval](./assets/Sentence-Window-retrieval-Pipeline.png)
+
+During retrieval, we retrieve the sentences that are most relevant to the query via similarity search and replace the sentence with the full surrounding context (using a static sentence-window around the context, implemented by retrieving sentences surrounding the one being originally retrieved)
+
+#### EXAMPLE
+
+![Sentence-Window-Retrieval-Example](./assets/Sentence-Window-Retrieval-Example.png)
+
+#### Advantages:
+
+1. Enhanced Specificity in Retrieval
+2. Context-Rich Synthesis
+3. Balanced Approach
+
+Disadvantages:
+
+1. Increased Complexity
+
+#### Auto-merging Retriever / Hierarchical Retriever
+
+Auto-merging retrieval aims to combine (or merge) information from multiple sources or segments of text to create a more comprehensive and contextually relevant response to a query. This approach is particularly useful when no single document or segment fully answers the query but rather the answer lies in combining information from multiple sources. It allows smaller chunks to be merged into bigger parent chunks. It does this via the following steps:
+
+1. Define a hierarchy of smaller chunks linked to parent chunks.
+2. If the set of smaller chunks linking to a parent chunk exceeds some threshold (say, cosine similarity), then “merge” smaller chunks into the bigger parent chunk.
+3. The method will finally retrieve the parent chunk for better context.
+
+#### Advantages:
+
+1. Comprehensive Contextual Responses
+2. Reduced Fragmentation
+3. Dynamic Content Integration
+
+#### Disadvantages:
+
+1. Complexity in Hierarchy and Threshold Management
+2. Risk of Overgeneralization
+3. Computational Intensity
+
+#### Ensemble Retrieval and Re-Ranking
+
+![Ensemble Retrieval and Re-Ranking](./assets/Ensemble-Retrieval-and-Re-Ranking.png)
+
+#### Let’s Understand the augmentation and generation
+
+_**User Input**_: A user provides a query in natural language, seeking an answer or completion.
+_**Information Retrieval**_: The retrieval mechanism scans the vector database to identify segments that are semantically
+similar to the user's query (which is also embedded). These segments are then given to the LLM to enrich its context for
+generating responses.
+_**Combining Data**_: The chosen data segments from the database are combined with the user's initial query, creating an
+expanded prompt.
+_**Generating Text**_: The enlarged prompt, filled with added context, is then given to the LLM, which crafts the final, contextaware response.
+
+This process involves integrating the insights gleaned from various sources, ensuring accuracy and relevance, and crafting
+a response that is not only informative but also aligns with the user's original query, maintaining a natural and
+conversational tone.
+
+# Benefits of RAG:
+
+• With RAG, the LLM is able to leverage knowledge and information that is not necessarily in its weights, providing it access to external knowledge bases.
+• Improved relevance and accuracy
+• Handling open-domain queries
+• Reduced generation bias
+• Multi-modal capabilities
+• Image captioning, content summarization
+• Human-AI Collaboration
+• RAG doesn't require model retraining, saving time and computational resources.
+
+# Disadvantages of RAG:
+
+RAG's performance depends on the comprehensiveness and correctness of the retriever’s knowledge base Information Loss
+
+If we look at the chain of processes in the RAG system:
+
+1. Chunking the text and generating embedding for the chunks
+2. Retrieving the chunks by semantic similarity search
+3. Generate response based on the text of the top_k chunks
