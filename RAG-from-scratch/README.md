@@ -116,6 +116,14 @@ This is why Neo4i recently added the ability to perform vector similarity search
 
 ## Phase 2 --> Retrieval
 
+### Cosine Similarity
+
+Cosine similarity measures how closely two vectors point in the same direction, helping us find the most relevant chunks for a query. It is useful in RAG because it captures semantic similarity even when the exact words differ.
+
+![Cosine Similarity Formula](./assets/Cosine-similarity-formula.png)
+
+_Replace this image with the mathematical formula diagram for cosine similarity._
+
 ## Phase 3 --> Generation
 
 ![Retrieval and Generation Flow](./assets/Retrieval-and-Generation.png)
