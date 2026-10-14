@@ -29,16 +29,44 @@ way than the basic print function.
 
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import speech_recognition as sr
+from PIL import Image
 import yt_dlp
 from moviepy.editor import VideoFileClip
+from google.genai import types
 
+from llama_index.core import Settings
 from llama_index.core import StorageContext
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.indices import MultiModalVectorStoreIndex
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+
+from llama_index.core.schema import ImageNode
+from llama_index.core.response.notebook_utils import display_source_node
+
+import matplotlib.pyplot as plt
+
+from llama_index.multi_modal_llms.gemini import GeminiMultiModal
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if not GEMINI_API_KEY:
+    raise ValueError("GOOGLE_API_KEY is missing from your .env file")
+
+Settings.embed_model = GoogleGenAIEmbedding(
+    model_name="gemini-embedding-001",
+    api_key=GEMINI_API_KEY,
+    embed_batch_size=5,
+    http_options=types.HttpOptions(timeout=120000),
+)
 
 # Configuration
 video_url = "https://www.youtube.com/watch?v=U_85TaXbeIo"
@@ -143,9 +171,94 @@ video_to_audio(filepath, output_audio_path)
 
 text_data = audio_to_text(output_audio_path)
 
-with open(output_folder + "output_text.txt", "w") as file:
-        file.write(text_data)
-print("Text data saved to file")
+text_output_path = output_folder / "output_text.txt"
+
+with open(text_output_path, "w", encoding="utf-8") as file:
+    file.write(text_data)
+
+print(f"Text data saved to: {text_output_path}")
 file.close()
 
+text_store=LanceDBVectorStore(uri="lancedb",table_name="text_collection")
+image_store=LanceDBVectorStore(uri="lancedb",table_name="image_collection")
 
+storage_context=StorageContext.from_defaults(vector_store=text_store,image_store=image_store)
+
+documents=SimpleDirectoryReader(output_folder).load_data()
+
+index = MultiModalVectorStoreIndex.from_documents(documents,storage_context=storage_context)
+
+retriever_engine=index.as_retriever(similarity_top_k=1, image_similarity_top_k=5)
+
+def retrieve(retriever_engine, query_str):
+    retrieval_results = retriever_engine.retrieve(query_str)
+
+    retrieved_image = []
+    retrieved_text = []
+    for res_node in retrieval_results:
+        if isinstance(res_node.node, ImageNode):
+            retrieved_image.append(res_node.node.metadata["file_path"])
+        else:
+            display_source_node(res_node, source_length=200)
+            retrieved_text.append(res_node.text)
+
+    return retrieved_image, retrieved_text
+
+query="can you tell me what is bayes theorm? explain equation of it"
+
+img,text=retrieve(retriever_engine,query)
+
+def plot_images(images_path):
+  images_shown = 0
+  plt.figure(figsize=(16, 9))
+  for img_path in images_path:
+        if os.path.isfile(img_path):
+            image = Image.open(img_path)
+
+            plt.subplot(2, 3, images_shown + 1)
+            plt.imshow(image)
+            plt.xticks([])
+            plt.yticks([])
+
+            images_shown += 1
+            if images_shown >= 5:
+                break
+
+plot_images(img)
+
+qa_tmpl_str=(
+    "Based on the provided information, including relevant images and retrieved context from the video, \
+    accurately and precisely answer the query without any additional prior knowledge.\n"
+
+    "---------------------\n"
+    "Context: {context_str}\n"
+    "Metadata for video: {metadata_str} \n"
+
+    "---------------------\n"
+    "Query: {query_str}\n"
+    "Answer: "
+)
+
+metadata_str = json.dumps(metadata_vid)
+context_str = "\n".join(text)
+
+image_documents = SimpleDirectoryReader(
+    input_files=img
+).load_data() if img else []
+
+mm_llm = GeminiMultiModal(
+    model="gemini-2.5-pro",
+    api_key=GEMINI_API_KEY,
+    max_new_tokens=1500,
+)
+
+result = mm_llm.complete(
+    prompt=qa_tmpl_str.format(
+        query_str=query,
+        metadata_str=metadata_str,
+        context_str=context_str,
+    ),
+    image_documents=image_documents,
+)
+
+print(result.text)
