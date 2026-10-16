@@ -39,7 +39,7 @@ from moviepy.editor import VideoFileClip
 from google.genai import types
 
 from llama_index.core import Settings
-from llama_index.core import StorageContext
+from llama_index.core import StorageContext, load_index_from_storage
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.indices import MultiModalVectorStoreIndex
 from llama_index.vector_stores.lancedb import LanceDBVectorStore
@@ -50,7 +50,10 @@ from llama_index.core.response.notebook_utils import display_source_node
 
 import matplotlib.pyplot as plt
 
-from llama_index.multi_modal_llms.gemini import GeminiMultiModal
+from llama_index.llms.google_genai import GoogleGenAI
+from llama_index.core.llms import ChatMessage, ImageBlock, TextBlock
+
+
 
 from dotenv import load_dotenv
 
@@ -179,14 +182,177 @@ with open(text_output_path, "w", encoding="utf-8") as file:
 print(f"Text data saved to: {text_output_path}")
 file.close()
 
-text_store=LanceDBVectorStore(uri="lancedb",table_name="text_collection")
-image_store=LanceDBVectorStore(uri="lancedb",table_name="image_collection")
+# ============================================================
+# LanceDB / Index configuration
+# ============================================================
 
-storage_context=StorageContext.from_defaults(vector_store=text_store,image_store=image_store)
+LANCEDB_DIR = BASE_DIR / "lancedb"
+TEXT_TABLE = "text_collection"
+IMAGE_TABLE = "image_collection"
+INDEX_METADATA_PATH = BASE_DIR / "index_metadata.json"
+INDEX_STORAGE_DIR = BASE_DIR / "index_storage"
 
-documents=SimpleDirectoryReader(output_folder).load_data()
+EMBEDDING_MODEL_NAME = "gemini-embedding-001"
 
-index = MultiModalVectorStoreIndex.from_documents(documents,storage_context=storage_context)
+
+def lance_table_exists(db_path, table_name):
+    """Check whether a LanceDB table exists on disk."""
+
+    db_path = Path(db_path)
+
+    if not db_path.exists():
+        return False
+
+    table_path = db_path / f"{table_name}.lance"
+
+    return table_path.exists()
+
+
+def index_is_valid():
+    """Check whether an existing index belongs to this video/model."""
+
+    if not INDEX_METADATA_PATH.exists():
+        return False
+
+    if not lance_table_exists(LANCEDB_DIR, TEXT_TABLE):
+        return False
+
+    if not lance_table_exists(LANCEDB_DIR, IMAGE_TABLE):
+        return False
+
+    try:
+        with open(
+            INDEX_METADATA_PATH,
+            "r",
+            encoding="utf-8"
+        ) as f:
+            metadata = json.load(f)
+
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    if metadata.get("video_url") != video_url:
+        return False
+
+    if metadata.get("embedding_model") != EMBEDDING_MODEL_NAME:
+        return False
+
+    return True
+
+
+# ============================================================
+# Create / reuse LanceDB
+# ============================================================
+
+text_store = LanceDBVectorStore(
+    uri=str(LANCEDB_DIR),
+    table_name=TEXT_TABLE,
+)
+
+image_store = LanceDBVectorStore(
+    uri=str(LANCEDB_DIR),
+    table_name=IMAGE_TABLE,
+)
+
+
+if index_is_valid() and INDEX_STORAGE_DIR.exists():
+
+    # --------------------------------------------------------
+    # EXISTING INDEX
+    # --------------------------------------------------------
+
+    print("\n" + "=" * 60)
+    print("EXISTING LANCEDB INDEX FOUND")
+    print("=" * 60)
+
+    print(f"Video: {video_url}")
+    print(f"Embedding model: {EMBEDDING_MODEL_NAME}")
+    print("Loading existing index...")
+    print("Skipping embedding generation...")
+    print("=" * 60)
+
+    # Load the previously persisted LlamaIndex structure.
+    # This does NOT generate embeddings again.
+    storage_context = StorageContext.from_defaults(
+        persist_dir=str(INDEX_STORAGE_DIR),
+        vector_store=text_store,
+        image_store=image_store,
+    )
+
+    index = load_index_from_storage(
+        storage_context,
+    )
+
+    print("Existing index loaded successfully.")
+
+
+else:
+
+    # --------------------------------------------------------
+    # CREATE NEW INDEX
+    # --------------------------------------------------------
+
+    print("\n" + "=" * 60)
+    print("NO VALID LANCEDB INDEX FOUND")
+    print("Creating embeddings...")
+    print("=" * 60)
+
+    documents = SimpleDirectoryReader(
+        input_dir=str(output_folder),
+        required_exts=[".txt", ".png"],
+    ).load_data()
+
+    storage_context = StorageContext.from_defaults(
+        vector_store=text_store,
+        image_store=image_store,
+    )
+
+    # Expensive operation
+    index = MultiModalVectorStoreIndex.from_documents(
+        documents,
+        storage_context=storage_context,
+    )
+
+    # --------------------------------------------------------
+    # PERSIST LLAMAINDEX INDEX STRUCTURE
+    # --------------------------------------------------------
+    #
+    # This is different from the LanceDB vectors.
+    #
+    # LanceDB stores the embeddings.
+    # index_storage stores the LlamaIndex structure needed
+    # to reconstruct the index on the next application run.
+    #
+
+    index.storage_context.persist(
+        persist_dir=str(INDEX_STORAGE_DIR)
+    )
+
+    # --------------------------------------------------------
+    # SAVE CACHE METADATA
+    # --------------------------------------------------------
+
+    index_metadata = {
+        "video_url": video_url,
+        "embedding_model": EMBEDDING_MODEL_NAME,
+        "text_table": TEXT_TABLE,
+        "image_table": IMAGE_TABLE,
+    }
+
+    with open(
+        INDEX_METADATA_PATH,
+        "w",
+        encoding="utf-8",
+    ) as f:
+        json.dump(
+            index_metadata,
+            f,
+            indent=2,
+        )
+
+    print("LanceDB index created successfully.")
+    print("LlamaIndex index structure persisted.")
+    print("Index metadata saved.")
 
 retriever_engine=index.as_retriever(similarity_top_k=1, image_similarity_top_k=5)
 
@@ -242,23 +408,32 @@ qa_tmpl_str=(
 metadata_str = json.dumps(metadata_vid)
 context_str = "\n".join(text)
 
-image_documents = SimpleDirectoryReader(
-    input_files=img
-).load_data() if img else []
+prompt = qa_tmpl_str.format(
+    query_str=query,
+    metadata_str=metadata_str,
+    context_str=context_str,
+)
 
-mm_llm = GeminiMultiModal(
-    model="gemini-2.5-pro",
+blocks = [
+    TextBlock(text=prompt)
+]
+
+for image_path in img[:5]:
+    blocks.append(
+        ImageBlock(path=str(image_path))
+    )
+
+message = ChatMessage(
+    role="user",
+    blocks=blocks,
+)
+
+mm_llm = GoogleGenAI(
+    model="gemini-3.8-flash",
     api_key=GEMINI_API_KEY,
-    max_new_tokens=1500,
+    max_tokens=1500,
 )
 
-result = mm_llm.complete(
-    prompt=qa_tmpl_str.format(
-        query_str=query,
-        metadata_str=metadata_str,
-        context_str=context_str,
-    ),
-    image_documents=image_documents,
-)
+response = mm_llm.chat([message])
 
-print(result.text)
+print(response.message.content)

@@ -1,0 +1,6 @@
+{
+  "video_url": "https://www.youtube.com/watch?v=U_85TaXbeIo",
+  "embedding_model": "gemini-embedding-001",
+  "text_table": "text_collection",
+  "image_table": "image_collection"
+}
