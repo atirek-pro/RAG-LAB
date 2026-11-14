@@ -1,3 +1,7 @@
+"""
+Using Chroma DB and custom Langchain classes i.e. esemble retrieval
+"""
+
 import os
 from dotenv import load_dotenv
 from pathlib import Path
